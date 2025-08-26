@@ -22,20 +22,38 @@ if uploaded_file:
     
     # --- Enhanced Data Cleaning ---
     # Handle the specific date format: 22-Sept-24
+    date_parsed = False
     if 'incident_date' in df.columns:
-        df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%y', errors='coerce')
+        try:
+            df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%y', errors='coerce')
+            date_parsed = True
+        except:
+            try:
+                df['incident_date'] = pd.to_datetime(df['incident_date'], errors='coerce')
+                date_parsed = True
+            except:
+                date_parsed = False
     
     # Handle the specific time format: 7:09
+    time_parsed = False
     if 'incident_time' in df.columns:
-        df['incident_time'] = pd.to_datetime(df['incident_time'], format='%H:%M', errors='coerce').dt.time
+        try:
+            df['incident_time'] = pd.to_datetime(df['incident_time'], format='%H:%M', errors='coerce').dt.time
+            time_parsed = True
+        except:
+            try:
+                df['incident_time'] = pd.to_datetime(df['incident_time'], errors='coerce').dt.time
+                time_parsed = True
+            except:
+                time_parsed = False
     
     # Extract hour from time for analysis
-    if 'incident_time' in df.columns:
+    if time_parsed and 'incident_time' in df.columns:
         # Convert time to datetime to extract hour
         df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
     
     # Extract date components
-    if 'incident_date' in df.columns:
+    if date_parsed and 'incident_date' in df.columns:
         df['day_of_week'] = df['incident_date'].dt.day_name()
         df['month'] = df['incident_date'].dt.month
         df['year'] = df['incident_date'].dt.year
@@ -70,7 +88,7 @@ if uploaded_file:
     current_year = datetime.now().year
     
     # Filter for current period if date exists
-    if 'incident_date' in df.columns:
+    if date_parsed and 'incident_date' in df.columns:
         df_current_month = df[(df['month'] == current_month) & (df['year'] == current_year)]
         df_last_month = df[(df['month'] == current_month-1) & (df['year'] == current_year)]
         
@@ -116,7 +134,7 @@ if uploaded_file:
     # --- PREDICTIVE ANALYTICS ---
     st.subheader("🔮 Predictive Analytics & Forecasting")
     
-    if 'incident_date' in df.columns and len(df) > 10:
+    if date_parsed and 'incident_date' in df.columns and len(df) > 10:
         col1, col2 = st.columns(2)
         
         with col1:
@@ -166,14 +184,16 @@ if uploaded_file:
             # Time-based risk
             if 'hour' in df.columns:
                 hour_risk = df['hour'].value_counts()
-                peak_hour = hour_risk.index[0] if len(hour_risk) > 0 else 0
-                risk_factors.append(f"⏰ Peak Risk Time: {peak_hour}:00 ({hour_risk.iloc[0]} incidents)")
+                if len(hour_risk) > 0:
+                    peak_hour = hour_risk.index[0]
+                    risk_factors.append(f"⏰ Peak Risk Time: {peak_hour}:00 ({hour_risk.iloc[0]} incidents)")
             
             # Day of week risk
             if 'day_of_week' in df.columns:
                 day_risk = df['day_of_week'].value_counts()
-                risky_day = day_risk.index[0] if len(day_risk) > 0 else "Unknown"
-                risk_factors.append(f"📅 Highest Risk Day: {risky_day} ({day_risk.iloc[0]} incidents)")
+                if len(day_risk) > 0:
+                    risky_day = day_risk.index[0]
+                    risk_factors.append(f"📅 Highest Risk Day: {risky_day} ({day_risk.iloc[0]} incidents)")
             
             # Injury severity prediction
             if 'was_injured' in df.columns and 'department' in df.columns:
@@ -198,7 +218,7 @@ if uploaded_file:
                 st.write(factor)
 
     # --- ADVANCED TIME ANALYSIS ---
-    if 'incident_date' in df.columns:
+    if date_parsed and 'incident_date' in df.columns:
         st.subheader("⏰ Time Pattern Analysis")
         
         col1, col2, col3 = st.columns(3)
@@ -307,7 +327,7 @@ if uploaded_file:
         
         with col2:
             # Category trends over time if date is available
-            if 'incident_date' in df.columns:
+            if date_parsed and 'incident_date' in df.columns:
                 category_trends = df.groupby([df['incident_date'].dt.date, category_col]).size().reset_index(name='count')
                 
                 fig = px.line(category_trends, x='incident_date', y='count', 
@@ -390,7 +410,7 @@ if uploaded_file:
                 pass
     
     # Trend-based recommendations
-    if 'incident_date' in df.columns and len(df) > 30:
+    if date_parsed and 'incident_date' in df.columns and len(df) > 30:
         recent_30d = df[df['incident_date'] >= (datetime.now() - timedelta(days=30))]
         if len(recent_30d) > len(df) * 0.3:  # If 30% of incidents in last 30 days
             recommendations.append("📈 **Trend Alert**: Recent surge in incidents detected - conduct immediate safety audit")
