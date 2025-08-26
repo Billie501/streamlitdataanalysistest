@@ -33,18 +33,10 @@ if uploaded_file:
     
     # Extract hour from datetime for time analysis
     if 'incident_date' in df.columns:
+        df['hour'] = pd.to_datetime(df['incident_date']).dt.hour
         df['day_of_week'] = pd.to_datetime(df['incident_date']).dt.day_name()
         df['month'] = pd.to_datetime(df['incident_date']).dt.month
         df['year'] = pd.to_datetime(df['incident_date']).dt.year
-    
-    # Extract hour from the TIME column for proper time analysis
-    if 'incident_time' in df.columns:
-        try:
-            # Handle time format like 06:45:00
-            df['hour'] = pd.to_datetime(df['incident_time'], errors='coerce').dt.hour
-        except:
-            # Fallback for different time formats
-            df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
     
     # Clean text columns
     text_columns = [col for col in df.columns if df[col].dtype == 'object']
@@ -119,7 +111,7 @@ if uploaded_file:
     col5.metric("Locations", df['location'].nunique() if 'location' in df.columns else 0)
 
     # --- PREDICTIVE ANALYTICS ---
-    st.subheader("🔮 Advanced Predictive Analytics & Forecasting")
+    st.subheader("🔮 Predictive Analytics & Forecasting")
     
     if 'incident_date' in df.columns and len(df) > 10:
         col1, col2 = st.columns(2)
@@ -203,188 +195,6 @@ if uploaded_file:
             
             for factor in risk_factors:
                 st.write(factor)
-
-    # --- ADVANCED FORECASTING MODELS ---
-    st.subheader("📈 Advanced Forecasting Models")
-    
-    if 'incident_date' in df.columns and len(df) > 20:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.write("**🔄 Seasonal Pattern Forecast**")
-            # Weekly pattern forecasting
-            if 'day_of_week' in df.columns:
-                weekly_pattern = df.groupby('day_of_week').size()
-                days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-                weekly_pattern = weekly_pattern.reindex(days_order, fill_value=0)
-                
-                # Predict next week based on historical average
-                avg_weekly = weekly_pattern.mean()
-                next_week_prediction = weekly_pattern.copy()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=weekly_pattern.index, y=weekly_pattern.values, name='Historical Average'))
-                fig.add_trace(go.Scatter(x=weekly_pattern.index, y=[avg_weekly]*7, 
-                                       mode='lines', name='Weekly Average', line=dict(dash='dash')))
-                fig.update_layout(title="Weekly Pattern Forecast", xaxis_title="Day", yaxis_title="Expected Incidents")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.write("**⏰ Hourly Risk Forecast**")
-            if 'hour' in df.columns:
-                hourly_pattern = df.groupby('hour').size()
-                
-                # Create risk zones
-                risk_zones = []
-                for hour, count in hourly_pattern.items():
-                    if count >= hourly_pattern.quantile(0.75):
-                        risk_zones.append(('High Risk', hour, count))
-                    elif count >= hourly_pattern.quantile(0.25):
-                        risk_zones.append(('Medium Risk', hour, count))
-                    else:
-                        risk_zones.append(('Low Risk', hour, count))
-                
-                # Create risk zone chart
-                risk_df = pd.DataFrame(risk_zones, columns=['Risk Level', 'Hour', 'Incidents'])
-                color_map = {'High Risk': 'red', 'Medium Risk': 'orange', 'Low Risk': 'green'}
-                
-                fig = px.bar(risk_df, x='Hour', y='Incidents', color='Risk Level',
-                           color_discrete_map=color_map, title="Hourly Risk Zones")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col3:
-            st.write("**📊 Department Risk Trajectory**")
-            if 'department' in df.columns and 'incident_date' in df.columns:
-                # Calculate department trends over time
-                dept_trends = df.groupby(['department', df['incident_date'].dt.date]).size().reset_index(name='daily_incidents')
-                dept_trends['incident_date'] = pd.to_datetime(dept_trends['incident_date'])
-                
-                # Get top 3 departments by incident count
-                top_depts = df['department'].value_counts().head(3).index.tolist()
-                dept_trends_top = dept_trends[dept_trends['department'].isin(top_depts)]
-                
-                if len(dept_trends_top) > 0:
-                    fig = px.line(dept_trends_top, x='incident_date', y='daily_incidents', 
-                                color='department', title="Department Incident Trends")
-                    st.plotly_chart(fig, use_container_width=True)
-
-    # --- PREDICTIVE RISK SCORING ---
-    st.subheader("🎯 Predictive Risk Scoring System")
-    
-    if len(df) > 10:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**🏢 Department Risk Score**")
-            if 'department' in df.columns:
-                dept_risk = df.groupby('department').agg({
-                    df.columns[0]: 'count',  # incident frequency
-                    'was_injured': 'mean' if 'was_injured' in df.columns else lambda x: 0  # severity
-                }).reset_index()
-                
-                if 'was_injured' in df.columns:
-                    dept_risk.columns = ['department', 'frequency', 'severity']
-                    # Calculate composite risk score (frequency * severity * 100)
-                    dept_risk['risk_score'] = (dept_risk['frequency'] * dept_risk['severity'] * 100).round(1)
-                else:
-                    dept_risk.columns = ['department', 'frequency']
-                    dept_risk['risk_score'] = dept_risk['frequency']
-                
-                dept_risk = dept_risk.sort_values('risk_score', ascending=False)
-                
-                # Display as progress bars
-                for _, row in dept_risk.head(5).iterrows():
-                    max_score = dept_risk['risk_score'].max()
-                    progress = row['risk_score'] / max_score if max_score > 0 else 0
-                    st.write(f"**{row['department']}**")
-                    st.progress(progress)
-                    st.write(f"Risk Score: {row['risk_score']}")
-        
-        with col2:
-            st.write("**⏰ Time-Based Risk Prediction**")
-            if 'hour' in df.columns:
-                # Create risk probability by hour
-                hourly_risk = df.groupby('hour').size()
-                total_incidents = hourly_risk.sum()
-                hourly_prob = (hourly_risk / total_incidents * 100).round(1)
-                
-                # Next 8 hours prediction
-                current_hour = datetime.now().hour
-                next_hours = [(current_hour + i) % 24 for i in range(8)]
-                
-                predictions = []
-                for hour in next_hours:
-                    prob = hourly_prob.get(hour, 0)
-                    predictions.append({
-                        'Hour': f"{hour:02d}:00",
-                        'Risk Probability': f"{prob}%",
-                        'Risk Level': 'High' if prob > hourly_prob.quantile(0.75) else 
-                                   'Medium' if prob > hourly_prob.quantile(0.25) else 'Low'
-                    })
-                
-                pred_df = pd.DataFrame(predictions)
-                st.dataframe(pred_df, hide_index=True)
-
-    # --- INCIDENT IMPACT FORECASTING ---
-    st.subheader("💼 Business Impact Forecasting")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**💰 Cost Impact Projection**")
-        # Estimate costs based on incident types
-        if 'was_injured' in df.columns:
-            injured_count = df['was_injured'].sum() if df['was_injured'].dtype == 'bool' else \
-                          df['was_injured'].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() in ['yes', 'true', '1', 'y', 'injured'] else 0).sum()
-            
-            # Industry average cost estimates (these would be customizable)
-            avg_injury_cost = 45000  # Average workplace injury cost
-            avg_incident_cost = 3000  # Average non-injury incident cost
-            
-            monthly_incidents = len(df) / max(1, df['month'].nunique()) if 'month' in df.columns else len(df)
-            monthly_injuries = injured_count / max(1, df['month'].nunique()) if 'month' in df.columns else injured_count
-            
-            projected_monthly_cost = (monthly_injuries * avg_injury_cost) + ((monthly_incidents - monthly_injuries) * avg_incident_cost)
-            projected_annual_cost = projected_monthly_cost * 12
-            
-            st.metric("Projected Monthly Cost", f"${projected_monthly_cost:,.0f}")
-            st.metric("Projected Annual Cost", f"${projected_annual_cost:,.0f}")
-            
-            # Cost reduction potential
-            if monthly_incidents > 0:
-                reduction_20pct = projected_annual_cost * 0.2
-                st.write(f"**💡 Potential Savings**: 20% incident reduction = **${reduction_20pct:,.0f}** annually")
-    
-    with col2:
-        st.write("**📈 Resource Allocation Forecast**")
-        
-        # Calculate required safety resources based on risk patterns
-        if 'department' in df.columns:
-            dept_incidents = df['department'].value_counts()
-            total_incidents = dept_incidents.sum()
-            
-            resource_needs = []
-            for dept, count in dept_incidents.head(5).items():
-                percentage = (count / total_incidents * 100)
-                if percentage > 30:
-                    priority = "🔴 Critical"
-                    resources = "Full-time safety officer + weekly audits"
-                elif percentage > 15:
-                    priority = "🟡 High"  
-                    resources = "Part-time safety oversight + monthly reviews"
-                else:
-                    priority = "🟢 Standard"
-                    resources = "Standard safety protocols"
-                
-                resource_needs.append({
-                    'Department': dept,
-                    'Incident %': f"{percentage:.1f}%",
-                    'Priority': priority,
-                    'Recommended Resources': resources
-                })
-            
-            resource_df = pd.DataFrame(resource_needs)
-            st.dataframe(resource_df, hide_index=True)
 
     # --- ADVANCED TIME ANALYSIS ---
     if 'incident_date' in df.columns:
