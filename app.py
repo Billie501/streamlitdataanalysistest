@@ -21,109 +21,25 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     
     # --- Enhanced Data Cleaning ---
-    # Handle the specific date format: 22-Sept-24 with multiple approaches
-    date_parsed = False
+    # Handle various date formats (revert to working version)
+    date_columns = [col for col in df.columns if 'date' in col.lower()]
+    for col in date_columns:
+        df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    # Standardize time columns
+    time_columns = [col for col in df.columns if 'time' in col.lower()]
+    for col in time_columns:
+        df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+    
+    # Extract hour from datetime for time analysis
     if 'incident_date' in df.columns:
-        st.write(f"**Debug**: Raw date sample: {df['incident_date'].head(3).tolist()}")
-        
-        # Try multiple date parsing approaches
-        try:
-            # First try: exact format 22-Sept-24
-            df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%y', errors='coerce')
-            if df['incident_date'].notna().sum() > 0:
-                date_parsed = True
-                st.write("✅ Date parsed with format %d-%b-%y")
-        except:
-            pass
-        
-        if not date_parsed:
-            try:
-                # Second try: with full year
-                df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%Y', errors='coerce')
-                if df['incident_date'].notna().sum() > 0:
-                    date_parsed = True
-                    st.write("✅ Date parsed with format %d-%b-%Y")
-            except:
-                pass
-        
-        if not date_parsed:
-            try:
-                # Third try: general parsing
-                df['incident_date'] = pd.to_datetime(df['incident_date'], errors='coerce')
-                if df['incident_date'].notna().sum() > 0:
-                    date_parsed = True
-                    st.write("✅ Date parsed with general method")
-            except:
-                pass
-        
-        if not date_parsed:
-            try:
-                # Fourth try: manual conversion for formats like "22-Sept-24"
-                def parse_date_manual(date_str):
-                    if pd.isna(date_str):
-                        return pd.NaT
-                    try:
-                        # Convert string like "22-Sept-24" to "22-Sep-24" (3-letter month)
-                        date_str = str(date_str).strip()
-                        parts = date_str.split('-')
-                        if len(parts) == 3:
-                            day = parts[0]
-                            month = parts[1][:3]  # Take first 3 letters
-                            year = parts[2]
-                            # Add 20 to year if it's 2 digits
-                            if len(year) == 2:
-                                year = '20' + year
-                            new_date_str = f"{day}-{month}-{year}"
-                            return pd.to_datetime(new_date_str, format='%d-%b-%Y', errors='coerce')
-                    except:
-                        return pd.NaT
-                    return pd.NaT
-                
-                df['incident_date'] = df['incident_date'].apply(parse_date_manual)
-                if df['incident_date'].notna().sum() > 0:
-                    date_parsed = True
-                    st.write("✅ Date parsed with manual method")
-            except:
-                pass
-        
-        st.write(f"**Debug**: Parsed dates sample: {df['incident_date'].head(3).tolist()}")
-        st.write(f"**Debug**: Valid dates count: {df['incident_date'].notna().sum()}/{len(df)}")
-    
-    # Handle the specific time format: 7:09
-    time_parsed = False
-    if 'incident_time' in df.columns:
-        try:
-            df['incident_time'] = pd.to_datetime(df['incident_time'], format='%H:%M', errors='coerce').dt.time
-            time_parsed = True
-        except:
-            try:
-                df['incident_time'] = pd.to_datetime(df['incident_time'], errors='coerce').dt.time
-                time_parsed = True
-            except:
-                time_parsed = False
-    
-    # Extract hour from time for analysis
-    if time_parsed and 'incident_time' in df.columns:
-        try:
-            # Convert time to datetime to extract hour
-            df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
-        except:
-            pass
-    
-    # Extract date components - only if date parsing was successful
-    if date_parsed and 'incident_date' in df.columns:
-        try:
-            df['day_of_week'] = df['incident_date'].dt.day_name()
-            df['month'] = df['incident_date'].dt.month
-            df['year'] = df['incident_date'].dt.year
-            st.write(f"✅ Date components extracted successfully")
-        except Exception as e:
-            st.write(f"❌ Error extracting date components: {e}")
-            date_parsed = False
+        df['hour'] = pd.to_datetime(df['incident_date']).dt.hour
+        df['day_of_week'] = pd.to_datetime(df['incident_date']).dt.day_name()
+        df['month'] = pd.to_datetime(df['incident_date']).dt.month
+        df['year'] = pd.to_datetime(df['incident_date']).dt.year
     
     # Clean text columns
-    text_columns = ['reporter_name', 'person_involved', 'department', 'incident_description', 
-                   'location', 'label', 'injury_description']
+    text_columns = [col for col in df.columns if df[col].dtype == 'object']
     for col in text_columns:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
@@ -151,7 +67,7 @@ if uploaded_file:
     current_year = datetime.now().year
     
     # Filter for current period if date exists
-    if date_parsed and 'incident_date' in df.columns:
+    if 'incident_date' in df.columns:
         df_current_month = df[(df['month'] == current_month) & (df['year'] == current_year)]
         df_last_month = df[(df['month'] == current_month-1) & (df['year'] == current_year)]
         
@@ -197,7 +113,7 @@ if uploaded_file:
     # --- PREDICTIVE ANALYTICS ---
     st.subheader("🔮 Predictive Analytics & Forecasting")
     
-    if date_parsed and 'incident_date' in df.columns and len(df) > 10:
+    if 'incident_date' in df.columns and len(df) > 10:
         col1, col2 = st.columns(2)
         
         with col1:
@@ -281,7 +197,7 @@ if uploaded_file:
                 st.write(factor)
 
     # --- ADVANCED TIME ANALYSIS ---
-    if date_parsed and 'incident_date' in df.columns:
+    if 'incident_date' in df.columns:
         st.subheader("⏰ Time Pattern Analysis")
         
         col1, col2, col3 = st.columns(3)
@@ -336,18 +252,20 @@ if uploaded_file:
             agg_dict = {df.columns[0]: 'count'}
             
             # Add injury rate if injury column exists
-            if injury_col:
-                if df[injury_col].dtype == 'bool':
-                    agg_dict[injury_col] = 'mean'
+            if 'was_injured' in df.columns:
+                if df['was_injured'].dtype == 'bool':
+                    agg_dict['was_injured'] = 'mean'
                 else:
                     # Create binary injury indicator for aggregation
-                    df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                    df['injury_binary'] = df['was_injured'].apply(
+                        lambda x: 1 if pd.notna(x) and str(x).strip().lower() in ['yes', 'true', '1', 'y', 'injured'] else 0
+                    )
                     agg_dict['injury_binary'] = 'mean'
             
             dept_analysis = df.groupby('department').agg(agg_dict).reset_index()
             
-            if injury_col or 'injury_binary' in dept_analysis.columns:
-                injury_rate_col = injury_col if injury_col in dept_analysis.columns else 'injury_binary'
+            if 'was_injured' in df.columns or 'injury_binary' in dept_analysis.columns:
+                injury_rate_col = 'was_injured' if 'was_injured' in dept_analysis.columns else 'injury_binary'
                 dept_analysis.columns = ['department', 'incident_count', 'injury_rate']
                 dept_analysis['injury_rate'] *= 100
                 
@@ -390,7 +308,7 @@ if uploaded_file:
         
         with col2:
             # Category trends over time if date is available
-            if date_parsed and 'incident_date' in df.columns:
+            if 'incident_date' in df.columns:
                 category_trends = df.groupby([df['incident_date'].dt.date, category_col]).size().reset_index(name='count')
                 
                 fig = px.line(category_trends, x='incident_date', y='count', 
@@ -450,18 +368,20 @@ if uploaded_file:
             recommendations.append(f"🏢 **Focus Area**: Prioritize safety training in {high_risk_depts.index[0]} department ({high_risk_depts.iloc[0]} incidents)")
     
     # Injury prevention
-    if injury_col and injury_rate > 0:
+    if 'was_injured' in df.columns and injury_rate > 0:
         if injury_rate > 10:
             recommendations.append(f"🏥 **Critical**: {injury_rate:.1f}% injury rate requires immediate safety protocol review")
         
         # Department-specific injury recommendations
         if 'department' in df.columns:
             try:
-                if df[injury_col].dtype == 'bool':
-                    dept_injury_rates = df.groupby('department')[injury_col].agg(['sum', 'count', 'mean'])
+                if df['was_injured'].dtype == 'bool':
+                    dept_injury_rates = df.groupby('department')['was_injured'].agg(['sum', 'count', 'mean'])
                 else:
                     # Create binary injury indicator
-                    df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                    df['injury_binary'] = df['was_injured'].apply(
+                        lambda x: 1 if pd.notna(x) and str(x).strip().lower() in ['yes', 'true', '1', 'y', 'injured'] else 0
+                    )
                     dept_injury_rates = df.groupby('department')['injury_binary'].agg(['sum', 'count', 'mean'])
                 
                 dept_injury_rates = dept_injury_rates[dept_injury_rates['count'] >= 3]  # Only departments with 3+ incidents
@@ -473,7 +393,7 @@ if uploaded_file:
                 pass
     
     # Trend-based recommendations
-    if date_parsed and 'incident_date' in df.columns and len(df) > 30:
+    if 'incident_date' in df.columns and len(df) > 30:
         recent_30d = df[df['incident_date'] >= (datetime.now() - timedelta(days=30))]
         if len(recent_30d) > len(df) * 0.3:  # If 30% of incidents in last 30 days
             recommendations.append("📈 **Trend Alert**: Recent surge in incidents detected - conduct immediate safety audit")
