@@ -9,9 +9,7 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime, timedelta
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
+# Using only available libraries - no sklearn needed
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -162,18 +160,30 @@ if uploaded_file:
             df_monthly = df_monthly.sort_values('date')
             
             if len(df_monthly) >= 3:
-                # Enhanced forecasting with linear regression
+                # Enhanced forecasting with numpy polynomial fitting (replaces sklearn)
                 df_monthly['month_num'] = range(len(df_monthly))
-                X = df_monthly[['month_num']].values
-                y = df_monthly['incident_count'].values
+                X = np.array(df_monthly['month_num'])
+                y = np.array(df_monthly['incident_count'])
                 
-                model = LinearRegression()
-                model.fit(X, y)
-                
-                # Create next 3 months prediction
-                future_months = np.array([[len(df_monthly) + i] for i in range(1, 4)])
-                future_predictions = model.predict(future_months)
-                future_predictions = np.maximum(future_predictions, 0)  # Ensure non-negative
+                # Use numpy polyfit for trend analysis (linear regression equivalent)
+                if len(X) >= 2:
+                    # Fit linear trend
+                    coeffs = np.polyfit(X, y, 1)  # Linear fit
+                    
+                    # Create next 3 months prediction
+                    future_months = np.array([len(df_monthly) + i for i in range(1, 4)])
+                    future_predictions = np.polyval(coeffs, future_months)
+                    future_predictions = np.maximum(future_predictions, 0)  # Ensure non-negative
+                    
+                    # Also calculate moving average for comparison
+                    window = min(3, len(df_monthly))
+                    moving_avg = df_monthly['incident_count'].tail(window).mean()
+                    
+                    # Blend trend and moving average (70% trend, 30% moving average)
+                    future_predictions = future_predictions * 0.7 + moving_avg * 0.3
+                else:
+                    # Fallback to simple average if insufficient data
+                    future_predictions = np.array([df_monthly['incident_count'].mean()] * 3)
                 
                 last_date = df_monthly['date'].max()
                 future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), 
@@ -185,14 +195,15 @@ if uploaded_file:
                 fig.add_trace(go.Scatter(x=future_dates, y=future_predictions, 
                                        mode='lines+markers', name='ML Forecast', 
                                        line=dict(dash='dash', color='red')))
-                fig.update_layout(title="3-Month ML-Based Incident Forecast", 
+                fig.update_layout(title="3-Month Trend-Based Incident Forecast", 
                                 xaxis_title="Date", yaxis_title="Incidents")
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Display predictions
-                st.write("**📈 Next 3 Months Predictions:**")
+                # Display predictions with confidence note
+                st.write("**📈 Next 3 Months Predictions (Trend Analysis):**")
                 for i, (date, pred) in enumerate(zip(future_dates, future_predictions)):
                     st.write(f"• {date.strftime('%B %Y')}: ~{int(pred)} incidents")
+                st.write("*Based on historical trend analysis and recent patterns*")
         
         with col2:
             st.write("**🎯 Enhanced Risk Indicators**")
@@ -257,22 +268,47 @@ if uploaded_file:
         with col1:
             st.write("**📍 Top 5 Predicted High-Risk Locations (Next 3 Months)**")
             
-            # Calculate location trends
+            # Calculate location trends using numpy and pandas only
             df_temp = df.copy()
             df_temp['year_month'] = df_temp['incident_date'].dt.to_period('M')
             
             location_trends = df_temp.groupby(['location', 'year_month']).size().reset_index(name='incidents')
+            
+            # Calculate weighted prediction scores
             location_monthly_avg = location_trends.groupby('location')['incidents'].mean().sort_values(ascending=False)
             
             # Get recent trend (last 3 months if available)
-            recent_periods = location_trends['year_month'].unique()[-3:]
+            recent_periods = sorted(location_trends['year_month'].unique())[-3:]
             recent_data = location_trends[location_trends['year_month'].isin(recent_periods)]
             recent_avg = recent_data.groupby('location')['incidents'].mean()
             
-            # Combine historical and recent data for prediction
-            prediction_scores = (location_monthly_avg * 0.6 + recent_avg.fillna(0) * 0.4).sort_values(ascending=False)
+            # Calculate trend slope for each location using numpy
+            location_trend_scores = {}
+            for location in df['location'].unique():
+                loc_data = location_trends[location_trends['location'] == location].sort_values('year_month')
+                if len(loc_data) >= 3:
+                    # Calculate trend using polyfit
+                    x = np.arange(len(loc_data))
+                    y = loc_data['incidents'].values
+                    if len(y) > 1 and np.var(y) > 0:
+                        trend_coeff = np.polyfit(x, y, 1)[0]  # Slope of linear trend
+                    else:
+                        trend_coeff = 0
+                else:
+                    trend_coeff = 0
+                
+                # Combine historical average, recent performance, and trend
+                hist_avg = location_monthly_avg.get(location, 0)
+                recent_perf = recent_avg.get(location, 0)
+                
+                # Weighted score: 50% historical, 30% recent, 20% trend
+                prediction_score = (hist_avg * 0.5 + recent_perf * 0.3 + 
+                                  max(0, hist_avg + trend_coeff) * 0.2)
+                location_trend_scores[location] = prediction_score
             
-            top_5_locations = prediction_scores.head(5)
+            # Sort by prediction score
+            top_5_locations = dict(sorted(location_trend_scores.items(), 
+                                        key=lambda x: x[1], reverse=True)[:5])
             
             for i, (location, score) in enumerate(top_5_locations.items(), 1):
                 historical_total = df[df['location'] == location].shape[0]
@@ -280,11 +316,15 @@ if uploaded_file:
         
         with col2:
             # Visual representation
-            fig = px.bar(x=top_5_locations.values, y=top_5_locations.index,
-                        orientation='h', 
-                        title="Top 5 Predicted High-Risk Locations",
-                        labels={'x': 'Predicted Monthly Incidents', 'y': 'Location'})
-            st.plotly_chart(fig, use_container_width=True)
+            if len(top_5_locations) > 0:
+                locations = list(top_5_locations.keys())
+                scores = list(top_5_locations.values())
+                
+                fig = px.bar(x=scores, y=locations,
+                            orientation='h', 
+                            title="Top 5 Predicted High-Risk Locations",
+                            labels={'x': 'Predicted Monthly Incidents', 'y': 'Location'})
+                st.plotly_chart(fig, use_container_width=True)
 
     # --- NEW: INCIDENT CATEGORY TREND PREDICTIONS ---
     category_col = None
@@ -303,25 +343,46 @@ if uploaded_file:
         with col1:
             st.write("**📈 Category Trend Forecast (Next 3 Months)**")
             
-            # Analyze category trends
+            # Analyze category trends using numpy for trend calculation
             df_temp = df.copy()
             df_temp['year_month'] = df_temp['incident_date'].dt.to_period('M')
             
             category_trends = df_temp.groupby([category_col, 'year_month']).size().reset_index(name='incidents')
             
-            # Calculate growth rates
+            # Calculate growth rates using numpy
             category_growth = {}
             for category in df[category_col].unique():
                 cat_data = category_trends[category_trends[category_col] == category].sort_values('year_month')
-                if len(cat_data) >= 2:
-                    recent_avg = cat_data['incidents'].tail(2).mean()
+                if len(cat_data) >= 3:
+                    # Use numpy to calculate trend slope
+                    x = np.arange(len(cat_data))
+                    y = cat_data['incidents'].values
+                    if len(y) > 1 and np.var(y) > 0:
+                        trend_slope = np.polyfit(x, y, 1)[0]  # Linear trend slope
+                        recent_avg = cat_data['incidents'].tail(2).mean()
+                        historical_avg = cat_data['incidents'].mean()
+                        
+                        # Calculate percentage change based on trend
+                        if historical_avg > 0:
+                            growth_rate = (trend_slope / historical_avg) * 100
+                        else:
+                            growth_rate = 0
+                    else:
+                        recent_avg = cat_data['incidents'].mean()
+                        growth_rate = 0
+                elif len(cat_data) >= 2:
+                    recent_avg = cat_data['incidents'].tail(1).iloc[0]
                     historical_avg = cat_data['incidents'].mean()
                     growth_rate = ((recent_avg - historical_avg) / historical_avg) * 100 if historical_avg > 0 else 0
-                    category_growth[category] = {
-                        'current_avg': recent_avg,
-                        'growth_rate': growth_rate,
-                        'total_incidents': df[df[category_col] == category].shape[0]
-                    }
+                else:
+                    recent_avg = cat_data['incidents'].mean() if len(cat_data) > 0 else 0
+                    growth_rate = 0
+                
+                category_growth[category] = {
+                    'current_avg': recent_avg,
+                    'growth_rate': growth_rate,
+                    'total_incidents': df[df[category_col] == category].shape[0]
+                }
             
             # Sort by predicted risk (combination of current incidents and growth)
             sorted_categories = sorted(category_growth.items(), 
@@ -624,5 +685,5 @@ else:
     st.write("• ✅ Top 5 incident location predictions for next 3 months")
     st.write("• ✅ Incident category trend forecasting")
     st.write("• ✅ Enhanced department matrix with color legend")
-    st.write("• ✅ ML-based incident forecasting")
+    st.write("• ✅ Advanced trend-based incident forecasting (using numpy)")
     st.write("• ✅ Advanced risk assessment and recommendations")
