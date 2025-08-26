@@ -1,3 +1,10 @@
+# To run this script, you first need to install the required libraries.
+# Open your terminal and run the following command:
+# pip install streamlit pandas plotly statsmodels
+#
+# Once the libraries are installed, you can run the app using:
+# streamlit run <your_script_name>.py
+
 # analytics_app.py
 # This script provides an interactive dashboard for incident analytics,
 # with added features for predictive analysis and risk forecasting.
