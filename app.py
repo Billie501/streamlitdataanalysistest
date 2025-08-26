@@ -21,25 +21,28 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     
     # --- Enhanced Data Cleaning ---
-    # Handle various date formats
-    date_columns = [col for col in df.columns if 'date' in col.lower()]
-    for col in date_columns:
-        df[col] = pd.to_datetime(df[col], errors='coerce')
-    
-    # Standardize time columns
-    time_columns = [col for col in df.columns if 'time' in col.lower()]
-    for col in time_columns:
-        df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
-    
-    # Extract hour from datetime for time analysis
+    # Handle the specific date format: 22-Sept-24
     if 'incident_date' in df.columns:
-        df['hour'] = pd.to_datetime(df['incident_date']).dt.hour
-        df['day_of_week'] = pd.to_datetime(df['incident_date']).dt.day_name()
-        df['month'] = pd.to_datetime(df['incident_date']).dt.month
-        df['year'] = pd.to_datetime(df['incident_date']).dt.year
+        df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%y', errors='coerce')
+    
+    # Handle the specific time format: 7:09
+    if 'incident_time' in df.columns:
+        df['incident_time'] = pd.to_datetime(df['incident_time'], format='%H:%M', errors='coerce').dt.time
+    
+    # Extract hour from time for analysis
+    if 'incident_time' in df.columns:
+        # Convert time to datetime to extract hour
+        df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
+    
+    # Extract date components
+    if 'incident_date' in df.columns:
+        df['day_of_week'] = df['incident_date'].dt.day_name()
+        df['month'] = df['incident_date'].dt.month
+        df['year'] = df['incident_date'].dt.year
     
     # Clean text columns
-    text_columns = [col for col in df.columns if df[col].dtype == 'object']
+    text_columns = ['reporter_name', 'person_involved', 'department', 'incident_description', 
+                   'location', 'label', 'injury_description']
     for col in text_columns:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
@@ -83,28 +86,22 @@ if uploaded_file:
         incident_trend = 0
         current_month_incidents = 0
     
-    # Injury rate calculation - handle different possible column names
+    # Injury rate calculation - now specifically for 'was_injured' column
     injury_rate = 0
-    injury_columns = ['was_injured', 'injured', 'injury', 'injury_information', 'injuries']
-    injury_col = None
-    
-    for col in injury_columns:
-        if col in df.columns:
-            injury_col = col
-            break
-    
-    if injury_col:
+    if 'was_injured' in df.columns:
         # Handle different data types (boolean, text, numbers)
         try:
-            if df[injury_col].dtype == 'bool':
-                injury_rate = (df[injury_col].sum() / len(df)) * 100 if len(df) > 0 else 0
-            elif df[injury_col].dtype == 'object':
-                # Count non-null, non-empty values as injuries
-                injured_count = df[injury_col].dropna().apply(lambda x: str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false']).sum()
+            if df['was_injured'].dtype == 'bool':
+                injury_rate = (df['was_injured'].sum() / len(df)) * 100 if len(df) > 0 else 0
+            elif df['was_injured'].dtype == 'object':
+                # Count 'Yes', 'True', '1', etc. as injuries
+                injured_count = df['was_injured'].dropna().apply(
+                    lambda x: str(x).strip().lower() in ['yes', 'true', '1', 'y', 'injured']
+                ).sum()
                 injury_rate = (injured_count / len(df)) * 100 if len(df) > 0 else 0
             else:
                 # Numeric - count values > 0
-                injury_rate = (df[injury_col].fillna(0).astype(float).gt(0).sum() / len(df)) * 100 if len(df) > 0 else 0
+                injury_rate = (df['was_injured'].fillna(0).astype(float).gt(0).sum() / len(df)) * 100 if len(df) > 0 else 0
         except:
             injury_rate = 0
     
@@ -131,7 +128,8 @@ if uploaded_file:
             df_temp['month'] = df_temp['incident_date'].dt.month
             
             df_monthly = df_temp.groupby(['year', 'month']).size().reset_index(name='incident_count')
-            df_monthly['date'] = pd.to_datetime(df_monthly[['year', 'month']])
+            # Create date column properly
+            df_monthly['date'] = pd.to_datetime(df_monthly[['year', 'month']].assign(day=1))
             df_monthly = df_monthly.sort_values('date')
             
             if len(df_monthly) >= 3:
@@ -142,7 +140,7 @@ if uploaded_file:
                 # Create next 3 months prediction
                 last_avg = df_monthly['incident_count'].tail(window).mean()
                 future_dates = pd.date_range(start=df_monthly['date'].max() + pd.DateOffset(months=1), 
-                                           periods=3, freq='M')
+                                           periods=3, freq='MS')  # MS = month start
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_monthly['date'], y=df_monthly['incident_count'], 
@@ -178,13 +176,15 @@ if uploaded_file:
                 risk_factors.append(f"📅 Highest Risk Day: {risky_day} ({day_risk.iloc[0]} incidents)")
             
             # Injury severity prediction
-            if injury_col and 'department' in df.columns:
+            if 'was_injured' in df.columns and 'department' in df.columns:
                 try:
-                    if df[injury_col].dtype == 'bool':
-                        injury_by_dept = df.groupby('department')[injury_col].mean().sort_values(ascending=False)
+                    if df['was_injured'].dtype == 'bool':
+                        injury_by_dept = df.groupby('department')['was_injured'].mean().sort_values(ascending=False)
                     else:
                         # For non-boolean, create a binary injury indicator
-                        df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                        df['injury_binary'] = df['was_injured'].apply(
+                            lambda x: 1 if pd.notna(x) and str(x).strip().lower() in ['yes', 'true', '1', 'y', 'injured'] else 0
+                        )
                         injury_by_dept = df.groupby('department')['injury_binary'].mean().sort_values(ascending=False)
                     
                     if len(injury_by_dept) > 0 and injury_by_dept.iloc[0] > 0:
