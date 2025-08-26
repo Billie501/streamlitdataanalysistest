@@ -1,4 +1,4 @@
-#analytics app 27/08/2025
+#analytics app 27/08/2025 - Enhanced Version
 
 import streamlit as st
 import pandas as pd
@@ -9,6 +9,9 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime, timedelta
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -28,17 +31,44 @@ if uploaded_file:
     for col in date_columns:
         df[col] = pd.to_datetime(df[col], errors='coerce')
     
-    # Standardize time columns
+    # Standardize time columns and handle 00:00:00 issue
     time_columns = [col for col in df.columns if 'time' in col.lower()]
+    valid_time_column = None
+    
     for col in time_columns:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+        # Check if this time column has meaningful data (not all 00:00:00)
+        if col in df.columns:
+            time_values = df[col].dropna()
+            if len(time_values) > 0:
+                # Count non-midnight times
+                non_midnight = sum(1 for t in time_values if t != pd.Timestamp('00:00:00').time())
+                if non_midnight > len(time_values) * 0.1:  # If more than 10% are not midnight
+                    valid_time_column = col
+                    break
     
     # Extract hour from datetime for time analysis
     if 'incident_date' in df.columns:
-        df['hour'] = pd.to_datetime(df['incident_date']).dt.hour
-        df['day_of_week'] = pd.to_datetime(df['incident_date']).dt.day_name()
-        df['month'] = pd.to_datetime(df['incident_date']).dt.month
-        df['year'] = pd.to_datetime(df['incident_date']).dt.year
+        incident_datetime = pd.to_datetime(df['incident_date'])
+        
+        # Try to get hour from time column first if available and valid
+        if valid_time_column and valid_time_column in df.columns:
+            # Convert time to hour
+            df['hour'] = df[valid_time_column].apply(
+                lambda x: x.hour if pd.notna(x) else pd.to_datetime(df.loc[df[valid_time_column]==x, 'incident_date']).dt.hour
+            )
+            st.info(f"ℹ️ Using '{valid_time_column}' column for time analysis (found meaningful time data)")
+        else:
+            # Fallback to extracting hour from incident_date
+            df['hour'] = incident_datetime.dt.hour
+            if valid_time_column:
+                st.warning(f"⚠️ Time column '{valid_time_column}' contains mostly 00:00:00 values. Using incident_date for time analysis.")
+            else:
+                st.info("ℹ️ No valid time column found. Using incident_date for time analysis.")
+        
+        df['day_of_week'] = incident_datetime.dt.day_name()
+        df['month'] = incident_datetime.dt.month
+        df['year'] = incident_datetime.dt.year
     
     # Clean text columns
     text_columns = [col for col in df.columns if df[col].dtype == 'object']
@@ -112,8 +142,8 @@ if uploaded_file:
     col4.metric("Departments", df['department'].nunique() if 'department' in df.columns else 0)
     col5.metric("Locations", df['location'].nunique() if 'location' in df.columns else 0)
 
-    # --- PREDICTIVE ANALYTICS ---
-    st.subheader("🔮 Predictive Analytics & Forecasting")
+    # --- ENHANCED PREDICTIVE ANALYTICS ---
+    st.subheader("🔮 Advanced Predictive Analytics & Forecasting")
     
     if 'incident_date' in df.columns and len(df) > 10:
         col1, col2 = st.columns(2)
@@ -132,26 +162,40 @@ if uploaded_file:
             df_monthly = df_monthly.sort_values('date')
             
             if len(df_monthly) >= 3:
-                # Simple moving average forecast
-                window = min(3, len(df_monthly))
-                df_monthly['forecast'] = df_monthly['incident_count'].rolling(window=window).mean().shift(1)
+                # Enhanced forecasting with linear regression
+                df_monthly['month_num'] = range(len(df_monthly))
+                X = df_monthly[['month_num']].values
+                y = df_monthly['incident_count'].values
+                
+                model = LinearRegression()
+                model.fit(X, y)
                 
                 # Create next 3 months prediction
-                last_avg = df_monthly['incident_count'].tail(window).mean()
-                future_dates = pd.date_range(start=df_monthly['date'].max() + pd.DateOffset(months=1), 
-                                           periods=3, freq='MS')  # MS = month start
+                future_months = np.array([[len(df_monthly) + i] for i in range(1, 4)])
+                future_predictions = model.predict(future_months)
+                future_predictions = np.maximum(future_predictions, 0)  # Ensure non-negative
+                
+                last_date = df_monthly['date'].max()
+                future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), 
+                                           periods=3, freq='MS')
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_monthly['date'], y=df_monthly['incident_count'], 
                                        mode='lines+markers', name='Actual Incidents'))
-                fig.add_trace(go.Scatter(x=future_dates, y=[last_avg]*3, 
-                                       mode='lines+markers', name='Predicted', 
-                                       line=dict(dash='dash')))
-                fig.update_layout(title="3-Month Incident Forecast", xaxis_title="Date", yaxis_title="Incidents")
+                fig.add_trace(go.Scatter(x=future_dates, y=future_predictions, 
+                                       mode='lines+markers', name='ML Forecast', 
+                                       line=dict(dash='dash', color='red')))
+                fig.update_layout(title="3-Month ML-Based Incident Forecast", 
+                                xaxis_title="Date", yaxis_title="Incidents")
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Display predictions
+                st.write("**📈 Next 3 Months Predictions:**")
+                for i, (date, pred) in enumerate(zip(future_dates, future_predictions)):
+                    st.write(f"• {date.strftime('%B %Y')}: ~{int(pred)} incidents")
         
         with col2:
-            st.write("**🎯 Risk Indicators**")
+            st.write("**🎯 Enhanced Risk Indicators**")
             
             # Calculate risk scores
             risk_factors = []
@@ -162,12 +206,18 @@ if uploaded_file:
                 high_risk_dept = dept_incidents.index[0] if len(dept_incidents) > 0 else "Unknown"
                 risk_factors.append(f"🔴 High Risk Department: {high_risk_dept} ({dept_incidents.iloc[0]} incidents)")
             
-            # Time-based risk
+            # Enhanced time-based risk with 00:00:00 handling
             if 'hour' in df.columns:
                 hour_risk = df['hour'].value_counts()
                 if len(hour_risk) > 0:
                     peak_hour = hour_risk.index[0]
-                    risk_factors.append(f"⏰ Peak Risk Time: {peak_hour}:00 ({hour_risk.iloc[0]} incidents)")
+                    # Check if peak hour is meaningful
+                    if peak_hour == 0 and len(hour_risk) > 1:
+                        # If midnight is peak, also show second highest
+                        second_peak = hour_risk.index[1]
+                        risk_factors.append(f"⏰ Peak Risk Times: {peak_hour}:00 ({hour_risk.iloc[0]} incidents), {second_peak}:00 ({hour_risk.iloc[1]} incidents)")
+                    else:
+                        risk_factors.append(f"⏰ Peak Risk Time: {peak_hour}:00 ({hour_risk.iloc[0]} incidents)")
             
             # Day of week risk
             if 'day_of_week' in df.columns:
@@ -197,6 +247,108 @@ if uploaded_file:
             
             for factor in risk_factors:
                 st.write(factor)
+
+    # --- NEW: TOP 5 LOCATION PREDICTIONS ---
+    if 'location' in df.columns and 'incident_date' in df.columns and len(df) > 20:
+        st.subheader("🗺️ Location Risk Forecasting")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**📍 Top 5 Predicted High-Risk Locations (Next 3 Months)**")
+            
+            # Calculate location trends
+            df_temp = df.copy()
+            df_temp['year_month'] = df_temp['incident_date'].dt.to_period('M')
+            
+            location_trends = df_temp.groupby(['location', 'year_month']).size().reset_index(name='incidents')
+            location_monthly_avg = location_trends.groupby('location')['incidents'].mean().sort_values(ascending=False)
+            
+            # Get recent trend (last 3 months if available)
+            recent_periods = location_trends['year_month'].unique()[-3:]
+            recent_data = location_trends[location_trends['year_month'].isin(recent_periods)]
+            recent_avg = recent_data.groupby('location')['incidents'].mean()
+            
+            # Combine historical and recent data for prediction
+            prediction_scores = (location_monthly_avg * 0.6 + recent_avg.fillna(0) * 0.4).sort_values(ascending=False)
+            
+            top_5_locations = prediction_scores.head(5)
+            
+            for i, (location, score) in enumerate(top_5_locations.items(), 1):
+                historical_total = df[df['location'] == location].shape[0]
+                st.write(f"{i}. **{location}** - Predicted: ~{score:.1f} incidents/month (Historical: {historical_total} total)")
+        
+        with col2:
+            # Visual representation
+            fig = px.bar(x=top_5_locations.values, y=top_5_locations.index,
+                        orientation='h', 
+                        title="Top 5 Predicted High-Risk Locations",
+                        labels={'x': 'Predicted Monthly Incidents', 'y': 'Location'})
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- NEW: INCIDENT CATEGORY TREND PREDICTIONS ---
+    category_col = None
+    if 'label' in df.columns:
+        category_col = 'label'
+    elif 'category' in df.columns:
+        category_col = 'category'
+    elif 'incident_category' in df.columns:
+        category_col = 'incident_category'
+    
+    if category_col and 'incident_date' in df.columns and len(df) > 15:
+        st.subheader("🏷️ Incident Category Trend Predictions")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**📈 Category Trend Forecast (Next 3 Months)**")
+            
+            # Analyze category trends
+            df_temp = df.copy()
+            df_temp['year_month'] = df_temp['incident_date'].dt.to_period('M')
+            
+            category_trends = df_temp.groupby([category_col, 'year_month']).size().reset_index(name='incidents')
+            
+            # Calculate growth rates
+            category_growth = {}
+            for category in df[category_col].unique():
+                cat_data = category_trends[category_trends[category_col] == category].sort_values('year_month')
+                if len(cat_data) >= 2:
+                    recent_avg = cat_data['incidents'].tail(2).mean()
+                    historical_avg = cat_data['incidents'].mean()
+                    growth_rate = ((recent_avg - historical_avg) / historical_avg) * 100 if historical_avg > 0 else 0
+                    category_growth[category] = {
+                        'current_avg': recent_avg,
+                        'growth_rate': growth_rate,
+                        'total_incidents': df[df[category_col] == category].shape[0]
+                    }
+            
+            # Sort by predicted risk (combination of current incidents and growth)
+            sorted_categories = sorted(category_growth.items(), 
+                                     key=lambda x: x[1]['current_avg'] + (x[1]['growth_rate'] * 0.1), 
+                                     reverse=True)
+            
+            st.write("**Top Categories by Predicted Risk:**")
+            for i, (category, data) in enumerate(sorted_categories[:5], 1):
+                trend_emoji = "📈" if data['growth_rate'] > 5 else "📉" if data['growth_rate'] < -5 else "➡️"
+                st.write(f"{i}. **{category}** {trend_emoji}")
+                st.write(f"   Current: ~{data['current_avg']:.1f}/month | Growth: {data['growth_rate']:+.1f}% | Total: {data['total_incidents']}")
+        
+        with col2:
+            # Category trend visualization
+            if len(sorted_categories) > 0:
+                categories = [item[0] for item in sorted_categories[:5]]
+                growth_rates = [item[1]['growth_rate'] for item in sorted_categories[:5]]
+                
+                fig = go.Figure(data=go.Bar(
+                    x=categories,
+                    y=growth_rates,
+                    marker_color=['red' if x > 5 else 'green' if x < -5 else 'orange' for x in growth_rates]
+                ))
+                fig.update_layout(title="Category Growth Rate Trends",
+                                xaxis_title="Category", 
+                                yaxis_title="Growth Rate (%)")
+                st.plotly_chart(fig, use_container_width=True)
 
     # --- ADVANCED TIME ANALYSIS ---
     if 'incident_date' in df.columns:
@@ -243,7 +395,7 @@ if uploaded_file:
                 fig.update_layout(xaxis_tickangle=45)
                 st.plotly_chart(fig, use_container_width=True)
 
-    # --- DEPARTMENT & LOCATION INSIGHTS ---
+    # --- ENHANCED DEPARTMENT & LOCATION INSIGHTS ---
     st.subheader("🏢 Department & Location Intelligence")
     
     col1, col2 = st.columns(2)
@@ -271,13 +423,37 @@ if uploaded_file:
                 dept_analysis.columns = ['department', 'incident_count', 'injury_rate']
                 dept_analysis['injury_rate'] *= 100
                 
-                # Create bubble chart
+                # Enhanced bubble chart with color coding and better legend
                 fig = px.scatter(dept_analysis, x='incident_count', y='injury_rate', 
                                size='incident_count', hover_name='department',
-                               title="Department Risk Matrix",
+                               title="Department Risk Matrix (with Color Legend)",
                                labels={'incident_count': 'Total Incidents', 
-                                     'injury_rate': 'Injury Rate (%)'})
+                                     'injury_rate': 'Injury Rate (%)'},
+                               color='injury_rate',
+                               color_continuous_scale='Reds',
+                               size_max=30)
+                
+                # Add color bar title
+                fig.update_coloraxes(colorbar_title="Injury Rate (%)")
+                
+                # Add quadrant lines for better interpretation
+                max_incidents = dept_analysis['incident_count'].max()
+                avg_injury_rate = dept_analysis['injury_rate'].mean()
+                
+                fig.add_hline(y=avg_injury_rate, line_dash="dash", line_color="gray", 
+                            annotation_text=f"Avg Injury Rate ({avg_injury_rate:.1f}%)")
+                fig.add_vline(x=max_incidents/2, line_dash="dash", line_color="gray",
+                            annotation_text="Mid Incident Count")
+                
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Add interpretation guide
+                st.write("**📊 Matrix Interpretation:**")
+                st.write("• **Top Right (Red)**: High incidents + High injury rate = Critical priority")
+                st.write("• **Top Left**: Low incidents + High injury rate = Severe incidents focus")
+                st.write("• **Bottom Right**: High incidents + Low injury rate = Prevention focus")
+                st.write("• **Bottom Left**: Low risk departments")
+                
             else:
                 fig = px.bar(dept_analysis, x='department', y=dept_analysis.columns[1],
                            title="Incidents by Department")
@@ -293,10 +469,8 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
 
     # --- INCIDENT CATEGORIZATION & ANALYSIS ---
-    if 'label' in df.columns or 'category' in df.columns:
+    if category_col:
         st.subheader("🏷️ Incident Category Analysis")
-        
-        category_col = 'label' if 'label' in df.columns else 'category'
         
         col1, col2 = st.columns(2)
         
@@ -352,22 +526,33 @@ if uploaded_file:
                            orientation='h', title="Most Common Terms")
                 st.plotly_chart(fig, use_container_width=True)
 
-    # --- BUSINESS RECOMMENDATIONS ---
+    # --- ENHANCED BUSINESS RECOMMENDATIONS ---
     st.subheader("💡 AI-Driven Recommendations")
     
     recommendations = []
     
     # Time-based recommendations
     if 'hour' in df.columns:
-        peak_hours = df['hour'].value_counts().head(2)
+        peak_hours = df['hour'].value_counts().head(3)
         if len(peak_hours) > 0:
-            recommendations.append(f"🕐 **Peak Risk Hours**: Increase safety supervision during {peak_hours.index[0]}:00-{peak_hours.index[0]+1}:00 (highest incident time)")
+            if peak_hours.index[0] == 0 and len(peak_hours) > 1:
+                # Handle midnight peak by focusing on second highest
+                recommendations.append(f"🕐 **Peak Risk Hours**: Focus on {peak_hours.index[1]}:00-{peak_hours.index[1]+1}:00 ({peak_hours.iloc[1]} incidents). Note: Midnight times may indicate data quality issues.")
+            else:
+                recommendations.append(f"🕐 **Peak Risk Hours**: Increase safety supervision during {peak_hours.index[0]}:00-{peak_hours.index[0]+1}:00 ({peak_hours.iloc[0]} incidents)")
     
     # Department recommendations
     if 'department' in df.columns:
         high_risk_depts = df['department'].value_counts().head(2)
         if len(high_risk_depts) > 0:
             recommendations.append(f"🏢 **Focus Area**: Prioritize safety training in {high_risk_depts.index[0]} department ({high_risk_depts.iloc[0]} incidents)")
+    
+    # Predictive recommendations
+    if 'location' in df.columns and len(df) > 20:
+        recommendations.append("🗺️ **Location Focus**: Review top 5 predicted high-risk locations above for targeted interventions")
+    
+    if category_col and len(df) > 15:
+        recommendations.append("📈 **Category Trends**: Monitor growing incident categories identified in trend analysis")
     
     # Injury prevention
     if 'was_injured' in df.columns and injury_rate > 0:
@@ -400,9 +585,13 @@ if uploaded_file:
         if len(recent_30d) > len(df) * 0.3:  # If 30% of incidents in last 30 days
             recommendations.append("📈 **Trend Alert**: Recent surge in incidents detected - conduct immediate safety audit")
     
+    # Data quality recommendations
+    if valid_time_column is None and any('time' in col.lower() for col in df.columns):
+        recommendations.append("⚠️ **Data Quality**: Consider improving time data collection - many incidents show 00:00:00 timestamps")
+    
     # Display recommendations
     if recommendations:
-        for i, rec in enumerate(recommendations[:5], 1):  # Limit to top 5
+        for i, rec in enumerate(recommendations[:7], 1):  # Increased to top 7
             st.write(f"{i}. {rec}")
     else:
         st.write("📊 **Data Analysis**: Upload more comprehensive data for personalized recommendations")
@@ -429,3 +618,11 @@ else:
     st.write("• Reporter Name, Person Involved, Incident Date & Time")
     st.write("• Department & Location, Incident Description")
     st.write("• Label/Category, Injury Information (was_injured: boolean)")
+    
+    st.write("**🆕 New Features in this version:**")
+    st.write("• ✅ Smart time column detection (handles 00:00:00 issue)")
+    st.write("• ✅ Top 5 incident location predictions for next 3 months")
+    st.write("• ✅ Incident category trend forecasting")
+    st.write("• ✅ Enhanced department matrix with color legend")
+    st.write("• ✅ ML-based incident forecasting")
+    st.write("• ✅ Advanced risk assessment and recommendations")
