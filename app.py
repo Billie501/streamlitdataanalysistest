@@ -1,5 +1,8 @@
 # analytics_app.py
+# This script provides an interactive dashboard for incident analytics,
+# with added features for predictive analysis and risk forecasting.
 
+# --- Core Libraries ---
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -8,6 +11,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore') # Suppress warnings
+
+# Import the ARIMA model from statsmodels
+from statsmodels.tsa.arima.model import ARIMA
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Advanced Incident Analytics", layout="wide")
@@ -114,7 +120,7 @@ if uploaded_file:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("### 📊 Incident Trend Forecast")
+            st.write("### 📊 Incident Trend Forecast (ARIMA)")
             
             # Aggregate data by month for time-series analysis
             df_temp = df.copy()
@@ -122,29 +128,44 @@ if uploaded_file:
             df_monthly = df_temp.groupby('year_month').size().reset_index(name='incident_count')
             df_monthly['date'] = df_monthly['year_month'].dt.to_timestamp()
             df_monthly = df_monthly.sort_values('date')
+            df_monthly = df_monthly.set_index('date') # ARIMA requires a DatetimeIndex
             
-            if len(df_monthly) >= 3:
-                # Use a simple moving average for forecasting the next 3 months
-                window = min(3, len(df_monthly))
-                last_avg = df_monthly['incident_count'].tail(window).mean()
-                
-                # Create future dates for the forecast
-                last_date = df_monthly['date'].max()
-                future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=3, freq='MS')
-                
-                # Plot the actual and predicted data
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_monthly['date'], y=df_monthly['incident_count'], 
-                                         mode='lines+markers', name='Actual Incidents'))
-                fig.add_trace(go.Scatter(x=future_dates, y=[last_avg]*3, 
-                                         mode='lines+markers', name='Predicted Incidents', 
-                                         line=dict(dash='dash', color='red')))
-                fig.update_layout(title="3-Month Incident Forecast", 
-                                  xaxis_title="Date", 
-                                  yaxis_title="Incidents")
-                st.plotly_chart(fig, use_container_width=True)
+            # Check for sufficient data for ARIMA
+            if len(df_monthly) >= 15: # Recommend at least 15 months of data
+                try:
+                    # Fit an ARIMA(1,1,1) model. These parameters (p,d,q) are a common starting point.
+                    model = ARIMA(df_monthly['incident_count'], order=(1, 1, 1))
+                    model_fit = model.fit()
+                    
+                    # Generate a 3-month forecast
+                    forecast = model_fit.forecast(steps=3)
+                    future_dates = pd.date_range(start=df_monthly.index.max() + pd.DateOffset(months=1), periods=3, freq='MS')
+                    forecast_series = pd.Series(forecast, index=future_dates)
+                    
+                    # Plot the actual and predicted data
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=df_monthly.index, y=df_monthly['incident_count'], 
+                                             mode='lines+markers', name='Actual Incidents'))
+                    fig.add_trace(go.Scatter(x=forecast_series.index, y=forecast_series.values, 
+                                             mode='lines+markers', name='ARIMA Predicted Incidents', 
+                                             line=dict(dash='dash', color='red')))
+                    fig.update_layout(title="3-Month Incident Forecast (ARIMA)", 
+                                      xaxis_title="Date", 
+                                      yaxis_title="Incidents")
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"ARIMA model could not be fitted: {e}. Falling back to simple forecast.")
+                    # Simple moving average fallback
+                    window = min(3, len(df_monthly))
+                    last_avg = df_monthly['incident_count'].tail(window).mean()
+                    future_dates = pd.date_range(start=df_monthly.index.max() + pd.DateOffset(months=1), periods=3, freq='MS')
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=df_monthly.index, y=df_monthly['incident_count'], mode='lines+markers', name='Actual Incidents'))
+                    fig.add_trace(go.Scatter(x=future_dates, y=[last_avg]*3, mode='lines+markers', name='Predicted Incidents', line=dict(dash='dash', color='red')))
+                    fig.update_layout(title="3-Month Incident Forecast (Simple Moving Average)", xaxis_title="Date", yaxis_title="Incidents")
+                    st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("Not enough data points to create a reliable forecast. Requires at least 3 months of data.")
+                st.info("ARIMA requires more data. Please upload at least 15 months of data for a reliable forecast.")
         
         with col2:
             st.write("### 🎯 Predictive Risk Indicators")
