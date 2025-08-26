@@ -83,10 +83,30 @@ if uploaded_file:
         incident_trend = 0
         current_month_incidents = 0
     
-    # Injury rate calculation
+    # Injury rate calculation - handle different possible column names
     injury_rate = 0
-    if 'was_injured' in df.columns:
-        injury_rate = (df['was_injured'].sum() / len(df)) * 100 if len(df) > 0 else 0
+    injury_columns = ['was_injured', 'injured', 'injury', 'injury_information', 'injuries']
+    injury_col = None
+    
+    for col in injury_columns:
+        if col in df.columns:
+            injury_col = col
+            break
+    
+    if injury_col:
+        # Handle different data types (boolean, text, numbers)
+        try:
+            if df[injury_col].dtype == 'bool':
+                injury_rate = (df[injury_col].sum() / len(df)) * 100 if len(df) > 0 else 0
+            elif df[injury_col].dtype == 'object':
+                # Count non-null, non-empty values as injuries
+                injured_count = df[injury_col].dropna().apply(lambda x: str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false']).sum()
+                injury_rate = (injured_count / len(df)) * 100 if len(df) > 0 else 0
+            else:
+                # Numeric - count values > 0
+                injury_rate = (df[injury_col].fillna(0).astype(float).gt(0).sum() / len(df)) * 100 if len(df) > 0 else 0
+        except:
+            injury_rate = 0
     
     # Display KPIs
     col1, col2, col3, col4, col5 = st.columns(5)
