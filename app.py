@@ -21,18 +21,73 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     
     # --- Enhanced Data Cleaning ---
-    # Handle the specific date format: 22-Sept-24
+    # Handle the specific date format: 22-Sept-24 with multiple approaches
     date_parsed = False
     if 'incident_date' in df.columns:
+        st.write(f"**Debug**: Raw date sample: {df['incident_date'].head(3).tolist()}")
+        
+        # Try multiple date parsing approaches
         try:
+            # First try: exact format 22-Sept-24
             df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%y', errors='coerce')
-            date_parsed = True
-        except:
-            try:
-                df['incident_date'] = pd.to_datetime(df['incident_date'], errors='coerce')
+            if df['incident_date'].notna().sum() > 0:
                 date_parsed = True
+                st.write("✅ Date parsed with format %d-%b-%y")
+        except:
+            pass
+        
+        if not date_parsed:
+            try:
+                # Second try: with full year
+                df['incident_date'] = pd.to_datetime(df['incident_date'], format='%d-%b-%Y', errors='coerce')
+                if df['incident_date'].notna().sum() > 0:
+                    date_parsed = True
+                    st.write("✅ Date parsed with format %d-%b-%Y")
             except:
-                date_parsed = False
+                pass
+        
+        if not date_parsed:
+            try:
+                # Third try: general parsing
+                df['incident_date'] = pd.to_datetime(df['incident_date'], errors='coerce')
+                if df['incident_date'].notna().sum() > 0:
+                    date_parsed = True
+                    st.write("✅ Date parsed with general method")
+            except:
+                pass
+        
+        if not date_parsed:
+            try:
+                # Fourth try: manual conversion for formats like "22-Sept-24"
+                def parse_date_manual(date_str):
+                    if pd.isna(date_str):
+                        return pd.NaT
+                    try:
+                        # Convert string like "22-Sept-24" to "22-Sep-24" (3-letter month)
+                        date_str = str(date_str).strip()
+                        parts = date_str.split('-')
+                        if len(parts) == 3:
+                            day = parts[0]
+                            month = parts[1][:3]  # Take first 3 letters
+                            year = parts[2]
+                            # Add 20 to year if it's 2 digits
+                            if len(year) == 2:
+                                year = '20' + year
+                            new_date_str = f"{day}-{month}-{year}"
+                            return pd.to_datetime(new_date_str, format='%d-%b-%Y', errors='coerce')
+                    except:
+                        return pd.NaT
+                    return pd.NaT
+                
+                df['incident_date'] = df['incident_date'].apply(parse_date_manual)
+                if df['incident_date'].notna().sum() > 0:
+                    date_parsed = True
+                    st.write("✅ Date parsed with manual method")
+            except:
+                pass
+        
+        st.write(f"**Debug**: Parsed dates sample: {df['incident_date'].head(3).tolist()}")
+        st.write(f"**Debug**: Valid dates count: {df['incident_date'].notna().sum()}/{len(df)}")
     
     # Handle the specific time format: 7:09
     time_parsed = False
@@ -49,14 +104,22 @@ if uploaded_file:
     
     # Extract hour from time for analysis
     if time_parsed and 'incident_time' in df.columns:
-        # Convert time to datetime to extract hour
-        df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
+        try:
+            # Convert time to datetime to extract hour
+            df['hour'] = pd.to_datetime(df['incident_time'].astype(str), format='%H:%M:%S', errors='coerce').dt.hour
+        except:
+            pass
     
-    # Extract date components
+    # Extract date components - only if date parsing was successful
     if date_parsed and 'incident_date' in df.columns:
-        df['day_of_week'] = df['incident_date'].dt.day_name()
-        df['month'] = df['incident_date'].dt.month
-        df['year'] = df['incident_date'].dt.year
+        try:
+            df['day_of_week'] = df['incident_date'].dt.day_name()
+            df['month'] = df['incident_date'].dt.month
+            df['year'] = df['incident_date'].dt.year
+            st.write(f"✅ Date components extracted successfully")
+        except Exception as e:
+            st.write(f"❌ Error extracting date components: {e}")
+            date_parsed = False
     
     # Clean text columns
     text_columns = ['reporter_name', 'person_involved', 'department', 'incident_description', 
@@ -259,7 +322,7 @@ if uploaded_file:
                 
                 fig = px.line(daily_incidents, x='day', y='incidents', 
                             markers=True, title="Weekly Incident Pattern")
-                fig.update_xaxis(tickangle=45)
+                fig.update_layout(xaxis_tickangle=45)
                 st.plotly_chart(fig, use_container_width=True)
 
     # --- DEPARTMENT & LOCATION INSIGHTS ---
