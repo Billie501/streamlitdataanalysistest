@@ -126,22 +126,26 @@ if uploaded_file:
             st.write("**📊 Incident Trend Forecast**")
             
             # Create monthly aggregation for forecasting
-            df_monthly = df.groupby([df['incident_date'].dt.year, df['incident_date'].dt.month]).size().reset_index()
-            df_monthly['date'] = pd.to_datetime(df_monthly[['incident_date', 'level_1']].rename(columns={'incident_date': 'year', 'level_1': 'month'}))
+            df_temp = df.copy()
+            df_temp['year'] = df_temp['incident_date'].dt.year
+            df_temp['month'] = df_temp['incident_date'].dt.month
+            
+            df_monthly = df_temp.groupby(['year', 'month']).size().reset_index(name='incident_count')
+            df_monthly['date'] = pd.to_datetime(df_monthly[['year', 'month']])
             df_monthly = df_monthly.sort_values('date')
             
             if len(df_monthly) >= 3:
                 # Simple moving average forecast
                 window = min(3, len(df_monthly))
-                df_monthly['forecast'] = df_monthly[0].rolling(window=window).mean().shift(1)
+                df_monthly['forecast'] = df_monthly['incident_count'].rolling(window=window).mean().shift(1)
                 
                 # Create next 3 months prediction
-                last_avg = df_monthly[0].tail(window).mean()
+                last_avg = df_monthly['incident_count'].tail(window).mean()
                 future_dates = pd.date_range(start=df_monthly['date'].max() + pd.DateOffset(months=1), 
                                            periods=3, freq='M')
                 
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_monthly['date'], y=df_monthly[0], 
+                fig.add_trace(go.Scatter(x=df_monthly['date'], y=df_monthly['incident_count'], 
                                        mode='lines+markers', name='Actual Incidents'))
                 fig.add_trace(go.Scatter(x=future_dates, y=[last_avg]*3, 
                                        mode='lines+markers', name='Predicted', 
@@ -174,12 +178,21 @@ if uploaded_file:
                 risk_factors.append(f"📅 Highest Risk Day: {risky_day} ({day_risk.iloc[0]} incidents)")
             
             # Injury severity prediction
-            if 'was_injured' in df.columns and 'department' in df.columns:
-                injury_by_dept = df.groupby('department')['was_injured'].mean().sort_values(ascending=False)
-                if len(injury_by_dept) > 0:
-                    high_injury_dept = injury_by_dept.index[0]
-                    injury_pct = injury_by_dept.iloc[0] * 100
-                    risk_factors.append(f"🏥 Injury Hotspot: {high_injury_dept} ({injury_pct:.1f}% injury rate)")
+            if injury_col and 'department' in df.columns:
+                try:
+                    if df[injury_col].dtype == 'bool':
+                        injury_by_dept = df.groupby('department')[injury_col].mean().sort_values(ascending=False)
+                    else:
+                        # For non-boolean, create a binary injury indicator
+                        df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                        injury_by_dept = df.groupby('department')['injury_binary'].mean().sort_values(ascending=False)
+                    
+                    if len(injury_by_dept) > 0 and injury_by_dept.iloc[0] > 0:
+                        high_injury_dept = injury_by_dept.index[0]
+                        injury_pct = injury_by_dept.iloc[0] * 100
+                        risk_factors.append(f"🏥 Injury Hotspot: {high_injury_dept} ({injury_pct:.1f}% injury rate)")
+                except:
+                    pass
             
             for factor in risk_factors:
                 st.write(factor)
@@ -236,12 +249,22 @@ if uploaded_file:
     
     with col1:
         if 'department' in df.columns:
-            dept_analysis = df.groupby('department').agg({
-                df.columns[0]: 'count',  # incident count
-                'was_injured': 'mean' if 'was_injured' in df.columns else lambda x: 0
-            }).reset_index()
+            # Create a safe aggregation function
+            agg_dict = {df.columns[0]: 'count'}
             
-            if 'was_injured' in df.columns:
+            # Add injury rate if injury column exists
+            if injury_col:
+                if df[injury_col].dtype == 'bool':
+                    agg_dict[injury_col] = 'mean'
+                else:
+                    # Create binary injury indicator for aggregation
+                    df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                    agg_dict['injury_binary'] = 'mean'
+            
+            dept_analysis = df.groupby('department').agg(agg_dict).reset_index()
+            
+            if injury_col or 'injury_binary' in dept_analysis.columns:
+                injury_rate_col = injury_col if injury_col in dept_analysis.columns else 'injury_binary'
                 dept_analysis.columns = ['department', 'incident_count', 'injury_rate']
                 dept_analysis['injury_rate'] *= 100
                 
@@ -344,19 +367,27 @@ if uploaded_file:
             recommendations.append(f"🏢 **Focus Area**: Prioritize safety training in {high_risk_depts.index[0]} department ({high_risk_depts.iloc[0]} incidents)")
     
     # Injury prevention
-    if 'was_injured' in df.columns and df['was_injured'].sum() > 0:
-        injury_rate = (df['was_injured'].sum() / len(df)) * 100
+    if injury_col and injury_rate > 0:
         if injury_rate > 10:
             recommendations.append(f"🏥 **Critical**: {injury_rate:.1f}% injury rate requires immediate safety protocol review")
         
         # Department-specific injury recommendations
         if 'department' in df.columns:
-            dept_injury_rates = df.groupby('department')['was_injured'].agg(['sum', 'count', 'mean'])
-            dept_injury_rates = dept_injury_rates[dept_injury_rates['count'] >= 3]  # Only departments with 3+ incidents
-            if len(dept_injury_rates) > 0:
-                worst_dept = dept_injury_rates['mean'].idxmax()
-                worst_rate = dept_injury_rates.loc[worst_dept, 'mean'] * 100
-                recommendations.append(f"🎯 **Targeted Intervention**: {worst_dept} has {worst_rate:.1f}% injury rate - implement enhanced safety measures")
+            try:
+                if df[injury_col].dtype == 'bool':
+                    dept_injury_rates = df.groupby('department')[injury_col].agg(['sum', 'count', 'mean'])
+                else:
+                    # Create binary injury indicator
+                    df['injury_binary'] = df[injury_col].apply(lambda x: 1 if pd.notna(x) and str(x).strip().lower() not in ['', 'no', 'none', 'n/a', 'false'] else 0)
+                    dept_injury_rates = df.groupby('department')['injury_binary'].agg(['sum', 'count', 'mean'])
+                
+                dept_injury_rates = dept_injury_rates[dept_injury_rates['count'] >= 3]  # Only departments with 3+ incidents
+                if len(dept_injury_rates) > 0 and dept_injury_rates['mean'].max() > 0:
+                    worst_dept = dept_injury_rates['mean'].idxmax()
+                    worst_rate = dept_injury_rates.loc[worst_dept, 'mean'] * 100
+                    recommendations.append(f"🎯 **Targeted Intervention**: {worst_dept} has {worst_rate:.1f}% injury rate - implement enhanced safety measures")
+            except:
+                pass
     
     # Trend-based recommendations
     if 'incident_date' in df.columns and len(df) > 30:
